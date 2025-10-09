@@ -1,17 +1,20 @@
 use std::env;
-use rusqlite::{params, Connection};
 use rand::rngs::OsRng;
 use rand::RngCore;
+use firestore::*;
+use serde::{Deserialize, Serialize};
+use chrono::Utc;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // CLI:
     // - `password` -> デフォルト16文字のパスワードを出力
     // - `password 24` -> 指定長のパスワードを出力
     // - `password add <url> <user> [password|length] [--title <title>] [--note <note>]` -> DBに保存
     // - `password get <url>` -> URLで検索してユーザID/パスワード/タイトル/備考を取得
     // - `password search <keyword>` -> 部分一致で検索（url/username/title/note）しID付きで一覧
-    // - `password update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]` -> レコード更新
-    // - `password delete <id>` -> レコード削除
+    // - `password update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]` -> レコード更新（idはFirestoreのドキュメントID）
+    // - `password delete <id>` -> レコード削除（idはFirestoreのドキュメントID）
     let mut args = env::args();
     let _prog = args.next();
     match args.next().as_deref() {
@@ -47,19 +50,15 @@ fn main() {
                 }
             }
 
-            match init_db() {
-                Ok(conn) => {
-                    if let Err(e) = insert_password(&conn, &url, &username, &password, title.as_deref(), note.as_deref()) {
-                        eprintln!("保存に失敗しました: {}", e);
-                        std::process::exit(1);
-                    } else {
-                        println!("保存しました: url={} user={}", url, username);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("DB初期化に失敗しました: {}", e);
-                    std::process::exit(1);
-                }
+            let db = match init_db().await {
+                Ok(db) => db,
+                Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1); }
+            };
+            if let Err(e) = insert_password(&db, &url, &username, &password, title.as_deref(), note.as_deref()).await {
+                eprintln!("保存に失敗しました: {}", e);
+                std::process::exit(1);
+            } else {
+                println!("保存しました: url={} user={}", url, username);
             }
         }
         Some("get") => {
@@ -67,9 +66,9 @@ fn main() {
                 eprintln!("使い方: password get <url>");
                 std::process::exit(1);
             }};
-            match init_db() {
-                Ok(conn) => match fetch_by_url(&conn, &url) {
-                    Ok(entries) => {
+            let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
+            match fetch_by_url(&db, &url).await {
+                Ok(entries) => {
                         if entries.is_empty() {
                             eprintln!("見つかりませんでした: url={}", url);
                             std::process::exit(1);
@@ -84,16 +83,8 @@ fn main() {
                                 }
                             }
                         }
-                    }
-                    Err(e) => {
-                        eprintln!("検索に失敗しました: {}", e);
-                        std::process::exit(1);
-                    }
-                },
-                Err(e) => {
-                    eprintln!("DB初期化に失敗しました: {}", e);
-                    std::process::exit(1);
                 }
+                Err(e) => { eprintln!("検索に失敗しました: {}", e); std::process::exit(1); }
             }
         }
         Some("search") => {
@@ -101,9 +92,9 @@ fn main() {
                 eprintln!("使い方: password search <keyword>");
                 std::process::exit(1);
             }};
-            match init_db() {
-                Ok(conn) => match search_entries(&conn, &keyword) {
-                    Ok(entries) => {
+            let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
+            match search_entries(&db, &keyword).await {
+                Ok(entries) => {
                         if entries.is_empty() {
                             eprintln!("見つかりませんでした: keyword={}", keyword);
                             std::process::exit(1);
@@ -117,26 +108,12 @@ fn main() {
                                 }
                             }
                         }
-                    }
-                    Err(e) => {
-                        eprintln!("検索に失敗しました: {}", e);
-                        std::process::exit(1);
-                    }
-                },
-                Err(e) => {
-                    eprintln!("DB初期化に失敗しました: {}", e);
-                    std::process::exit(1);
                 }
+                Err(e) => { eprintln!("検索に失敗しました: {}", e); std::process::exit(1); }
             }
         }
         Some("update") => {
-            let id: i64 = match args.next().and_then(|s| s.parse::<i64>().ok()) {
-                Some(v) => v,
-                None => {
-                    eprintln!("使い方: password update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]");
-                    std::process::exit(1);
-                }
-            };
+            let id: String = match args.next() { Some(v) => v, None => { eprintln!("使い方: password update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]"); std::process::exit(1);} };
             let mut new_url: Option<String> = None;
             let mut new_user: Option<String> = None;
             let mut new_password: Option<String> = None;
@@ -161,42 +138,22 @@ fn main() {
                 eprintln!("更新内容が指定されていません");
                 std::process::exit(1);
             }
-            match init_db() {
-                Ok(conn) => {
-                    if let Err(e) = update_entry(&conn, id, new_url.as_deref(), new_user.as_deref(), new_password.as_deref(), title.as_deref(), note.as_deref()) {
-                        eprintln!("更新に失敗しました: {}", e);
-                        std::process::exit(1);
-                    } else {
-                        println!("更新しました: id={}", id);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("DB初期化に失敗しました: {}", e);
-                    std::process::exit(1);
-                }
+            let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
+            if let Err(e) = update_entry(&db, &id, new_url.as_deref(), new_user.as_deref(), new_password.as_deref(), title.as_deref(), note.as_deref()).await {
+                eprintln!("更新に失敗しました: {}", e);
+                std::process::exit(1);
+            } else {
+                println!("更新しました: id={}", id);
             }
         }
         Some("delete") => {
-            let id: i64 = match args.next().and_then(|s| s.parse::<i64>().ok()) {
-                Some(v) => v,
-                None => {
-                    eprintln!("使い方: password delete <id>");
-                    std::process::exit(1);
-                }
-            };
-            match init_db() {
-                Ok(conn) => {
-                    if let Err(e) = delete_entry(&conn, id) {
-                        eprintln!("削除に失敗しました: {}", e);
-                        std::process::exit(1);
-                    } else {
-                        println!("削除しました: id={}", id);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("DB初期化に失敗しました: {}", e);
-                    std::process::exit(1);
-                }
+            let id: String = match args.next() { Some(v) => v, None => { eprintln!("使い方: password delete <id>"); std::process::exit(1);} };
+            let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
+            if let Err(e) = delete_entry(&db, &id).await {
+                eprintln!("削除に失敗しました: {}", e);
+                std::process::exit(1);
+            } else {
+                println!("削除しました: id={}", id);
             }
         }
         Some(s) => {
@@ -215,6 +172,21 @@ const UPPER: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const LOWER: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
 const DIGIT: &[u8] = b"0123456789";
 const SYMBOL: &[u8] = b"!@#$%^&*()-_=+[]{};:,.?/"; // スペースやバックスラッシュ、`'"` は除外
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PasswordRecord {
+    id: String,
+    url: String,
+    username: String,
+    password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+    created_at: String,
+}
+
+const COLLECTION: &str = "passwords";
 
 fn generate_password(len: usize) -> String {
     // 総合アルファベット
@@ -269,117 +241,125 @@ fn fisher_yates_shuffle(data: &mut [u8]) {
     }
 }
 
-fn init_db() -> rusqlite::Result<Connection> {
-    let conn = Connection::open("passwords.db")?;
-    // 新スキーマ（title, noteを追加）でCREATE。既存DBには後続のALTERで対応。
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS passwords (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT NOT NULL,
-            username TEXT NOT NULL,
-            password TEXT NOT NULL,
-            title TEXT,
-            note TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )",
-        [],
-    )?;
-
-    // 既存DBへの後方互換: 欠けている列を追加（エラーは無視して続行）
-    let _ = conn.execute("ALTER TABLE passwords ADD COLUMN title TEXT", []);
-    let _ = conn.execute("ALTER TABLE passwords ADD COLUMN note TEXT", []);
-    Ok(conn)
+async fn init_db() -> Result<FirestoreDb, Box<dyn std::error::Error + Send + Sync>> {
+    let project_id = std::env::var("PROJECT_ID")?;
+    let db = FirestoreDb::new(&project_id).await?;
+    Ok(db)
 }
 
-fn insert_password(
-    conn: &Connection,
+async fn insert_password(
+    db: &FirestoreDb,
     url: &str,
     username: &str,
     password: &str,
     title: Option<&str>,
     note: Option<&str>,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO passwords (url, username, password, title, note) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![url, username, password, title.unwrap_or(""), note.unwrap_or("")],
-    )?;
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let rec = PasswordRecord {
+        id: id.clone(),
+        url: url.to_string(),
+        username: username.to_string(),
+        password: password.to_string(),
+        title: title.map(|s| s.to_string()),
+        note: note.map(|s| s.to_string()),
+        created_at: Utc::now().to_rfc3339(),
+    };
+    db.fluent()
+        .insert()
+        .into(COLLECTION)
+        .document_id(&id)
+        .object(&rec)
+        .execute()
+        .await?;
     Ok(())
 }
 
-fn fetch_by_url(conn: &Connection, url: &str) -> rusqlite::Result<Vec<(String, String, Option<String>, Option<String>)>> {
-    let mut stmt = conn.prepare(
-        "SELECT username, password, NULLIF(title, ''), NULLIF(note, '')
-         FROM passwords
-         WHERE url = ?1
-         ORDER BY created_at DESC, id DESC",
-    )?;
-    let rows = stmt.query_map(params![url], |row| {
-        let u: String = row.get(0)?;
-        let p: String = row.get(1)?;
-        let t: Option<String> = row.get(2)?;
-        let n: Option<String> = row.get(3)?;
-        Ok((u, p, t, n))
-    })?;
+async fn fetch_by_url(db: &FirestoreDb, url: &str) -> Result<Vec<(String, String, Option<String>, Option<String>)>, Box<dyn std::error::Error + Send + Sync>> {
+    use futures::StreamExt;
+    let mut stream = db
+        .fluent()
+        .select()
+        .from(COLLECTION)
+        .filter(|q| q.for_all([q.field(path!(PasswordRecord::url)).eq(url)]))
+        .obj()
+        .stream_query()
+        .await?;
     let mut out = Vec::new();
-    for r in rows {
-        out.push(r?);
+    while let Some(item) = stream.next().await {
+        let rec: PasswordRecord = item?;
+        out.push((rec.username, rec.password, rec.title, rec.note));
     }
     Ok(out)
 }
 
-fn search_entries(conn: &Connection, keyword: &str) -> rusqlite::Result<Vec<(i64, String, String, Option<String>, Option<String>)>> {
-    let like = format!("%{}%", keyword);
-    let mut stmt = conn.prepare(
-        "SELECT id, url, username, NULLIF(title, ''), NULLIF(note, '')
-         FROM passwords
-         WHERE url LIKE ?1 OR username LIKE ?1 OR title LIKE ?1 OR note LIKE ?1
-         ORDER BY created_at DESC, id DESC",
-    )?;
-    let rows = stmt.query_map(params![like], |row| {
-        let id: i64 = row.get(0)?;
-        let url: String = row.get(1)?;
-        let user: String = row.get(2)?;
-        let title: Option<String> = row.get(3)?;
-        let note: Option<String> = row.get(4)?;
-        Ok((id, url, user, title, note))
-    })?;
+async fn search_entries(db: &FirestoreDb, keyword: &str) -> Result<Vec<(String, String, String, Option<String>, Option<String>)>, Box<dyn std::error::Error + Send + Sync>> {
+    use futures::StreamExt;
+    // 全件ストリームを取得してクライアント側で部分一致フィルタ
+    let mut stream = db
+        .fluent()
+        .select()
+        .from(COLLECTION)
+        .obj()
+        .stream_query()
+        .await?;
+    let kw = keyword.to_lowercase();
     let mut out = Vec::new();
-    for r in rows { out.push(r?); }
+    while let Some(item) = stream.next().await {
+        let rec: PasswordRecord = item?;
+        let hay = format!("{}\n{}\n{}\n{}\n{}", rec.url, rec.username, rec.title.clone().unwrap_or_default(), rec.note.clone().unwrap_or_default(), rec.id);
+        if hay.to_lowercase().contains(&kw) {
+            out.push((rec.id, rec.url, rec.username, rec.title, rec.note));
+        }
+    }
+    // created_at降順にしたいが、ここではクライアント側で簡易に並び替え
+    out.sort_by(|a, b| b.0.cmp(&a.0));
     Ok(out)
 }
 
-fn update_entry(
-    conn: &Connection,
-    id: i64,
+async fn update_entry(
+    db: &FirestoreDb,
+    id: &str,
     url: Option<&str>,
     username: Option<&str>,
     password: Option<&str>,
     title: Option<&str>,
     note: Option<&str>,
-) -> rusqlite::Result<()> {
-    // 動的にSET句を構築
-    let mut sets: Vec<&str> = Vec::new();
-    let mut bind_values: Vec<String> = Vec::new();
-    if let Some(v) = url { sets.push("url = ?"); bind_values.push(v.to_string()); }
-    if let Some(v) = username { sets.push("username = ?"); bind_values.push(v.to_string()); }
-    if let Some(v) = password { sets.push("password = ?"); bind_values.push(v.to_string()); }
-    if let Some(v) = title { sets.push("title = ?"); bind_values.push(v.to_string()); }
-    if let Some(v) = note { sets.push("note = ?"); bind_values.push(v.to_string()); }
-    let sql = format!("UPDATE passwords SET {} WHERE id = ?", sets.join(", "));
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // 現在のドキュメントを取得
+    let mut current: PasswordRecord = match db
+        .fluent()
+        .select()
+        .by_id_in(COLLECTION)
+        .obj()
+        .one(id)
+        .await? {
+            Some(v) => v,
+            None => { return Err(format!("id={} が見つかりません", id).into()); }
+        };
+    if let Some(v) = url { current.url = v.to_string(); }
+    if let Some(v) = username { current.username = v.to_string(); }
+    if let Some(v) = password { current.password = v.to_string(); }
+    if let Some(v) = title { current.title = Some(v.to_string()); }
+    if let Some(v) = note { current.note = Some(v.to_string()); }
 
-    let mut stmt = conn.prepare(&sql)?;
-    // 参照のライフタイムを満たすため、まず所有するStringを保持し、その参照を束ねる
-    let mut bind_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
-    for v in &bind_values {
-        bind_refs.push(v as &dyn rusqlite::ToSql);
-    }
-    bind_refs.push(&id);
-    stmt.execute(rusqlite::params_from_iter(bind_refs))?;
+    db.fluent()
+        .update()
+        .in_col(COLLECTION)
+        .document_id(id)
+        .object(&current)
+        .execute()
+        .await?;
     Ok(())
 }
 
-fn delete_entry(conn: &Connection, id: i64) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM passwords WHERE id = ?1", params![id])?;
+async fn delete_entry(db: &FirestoreDb, id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    db.fluent()
+        .delete()
+        .from(COLLECTION)
+        .document_id(id)
+        .execute()
+        .await?;
     Ok(())
 }
 
