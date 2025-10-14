@@ -6,9 +6,14 @@ edition = "2024"
 [dependencies]
 rand = "0.8"
 tokio = { version = "1", features = ["full"] }
-firestore = "0.47"
 serde = { version = "1", features = ["derive"] }
 chrono = "0.4"
 futures = "0.3"
 uuid = { version = "1", features = ["v4"] }
 rustls = { version = "0.23", features = ["ring"] }
+rusqlite = { version = "0.31" }
+chacha20poly1305 = { version = "0.10", features = ["rand_core"] }
+hkdf = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+csv = "1.3"
