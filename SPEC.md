@@ -3,7 +3,7 @@
 ## 概要
 - 本ツールはコマンドラインから安全なパスワードを生成し、SQLiteに「URL・ユーザID・パスワード」を1組として保存・取得できるユーティリティです。さらに、各レコードに任意の**タイトル(title)**と**備考(note)**を付与できます。
 - 併せて、**パスキー(passkey)** 情報（`rp_id`/`credential_id`/`user_handle`/`public_key`/`sign_count`/`transports`）の保存・検索・削除・CSV入出力にも対応します。
-- すべての機密操作はセッション認証が必要です（`password auth <secret>`）。
+- すべての機密操作はセッション認証が必要です（`tsupasswd auth <secret>`）。
 
 ## 対象ファイル・構成
 - プロジェクトルート: `password/`
@@ -24,6 +24,7 @@
   - `rusqlite = { version = "0.31" }`
   - `chacha20poly1305 = { version = "0.10", features = ["rand_core"] }`
   - `hkdf = "0.12"`, `sha2 = "0.10"`, `base64 = "0.22"`, `csv = "1.3"`
+  - `serde_json = "1"`（`--json` 出力用）
   - （開発用）`assert_cmd`, `predicates`, `tempfile`
 
 ## コマンド仕様
@@ -58,14 +59,22 @@
       - `cargo run -- add https://example.com alice "S3cure!Pass" --title "社内用"`
   - **取得（get）**
     - 仕様: URLで検索し、ユーザID・パスワード・タイトル・備考を取得して出力
-    - 形式: `get <url>`
-    - 出力: `user="<user>" password="<password>" [title="<title>"] [note="<note>"]`
-    - 使用例: `cargo run -- get https://example.com`
+    - 形式: `get <url> [--json]`
+    - 出力:
+      - 既定: `user="<user>" password="<password>" [title="<title>"] [note="<note>"]`
+      - `--json`: JSON配列（各要素が1レコード）
+    - 使用例:
+      - `cargo run -- get https://example.com`
+      - `cargo run -- get https://example.com --json`
   - **部分一致検索（search）**
     - 仕様: `url`/`username`/`title`/`note` のいずれかにキーワードが部分一致するレコードを検索し、IDとともに一覧表示
-    - 形式: `search <keyword>`
-    - 出力例: `id=12 url="https://example.com" user="alice" title="Example" note="メインアカウント"`
-    - 使用例: `cargo run -- search example`
+    - 形式: `search <keyword> [--json]`
+    - 出力:
+      - 既定: `id=<id> url="<url>" user="<user>" [title="<title>"] [note="<note>"]`
+      - `--json`: JSON配列（各要素が1レコード）
+    - 使用例:
+      - `cargo run -- search example`
+      - `cargo run -- search example --json`
   - **更新（update）**
     - 仕様: 指定した `id` のレコードを部分更新
     - 形式: `update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]`
@@ -85,8 +94,8 @@
     - 使用例: `cargo run -- import ./passwords.csv`
   - **パスキー（passkey サブコマンド）**
     - `passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]`
-    - `passkey get <rp_id> <user_handle>`
-    - `passkey search <keyword>`
+    - `passkey get <rp_id> <user_handle> [--json]`
+    - `passkey search <keyword> [--json]`
     - `passkey delete <id>`
     - `passkey export <csv_path>`
     - `passkey import <csv_path>`
@@ -172,7 +181,7 @@
 - パスワードは**保存時に暗号化**、取得時に復号
   - 鍵導出: `HKDF-SHA256` で `salt=id`、`ikm=AUTH_SECRET`、`info="password-at-rest"`
   - 方式: `ChaCha20-Poly1305`（12Bランダムノンス + 本文 + 認証タグ）をBase64で保存
-- 認証: `password auth <secret>` 実行時に `~/.password_cli/session` に有効期限を書き込み、各コマンド開始時に `ensure_authenticated()` で検証
+- 認証: `tsupasswd auth <secret>` 実行時に `~/.password_cli/session` に有効期限を書き込み、各コマンド開始時に `ensure_authenticated()` で検証
 
 ## エラーハンドリング・終了コード
 - 正常終了: `0`

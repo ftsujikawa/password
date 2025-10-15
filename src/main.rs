@@ -17,13 +17,13 @@ use csv::{ReaderBuilder, WriterBuilder};
 #[tokio::main]
 async fn main() {
     // CLI:
-    // - `password` -> デフォルト16文字のパスワードを出力
-    // - `password 24` -> 指定長のパスワードを出力
-    // - `password add <url> <user> [password|length] [--title <title>] [--note <note>]` -> DBに保存
-    // - `password get <url>` -> URLで検索してユーザID/パスワード/タイトル/備考を取得
-    // - `password search <keyword>` -> 部分一致で検索（url/username/title/note）しID付きで一覧
-    // - `password update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]` -> レコード更新（idはFirestoreのドキュメントID）
-    // - `password delete <id>` -> レコード削除（idはFirestoreのドキュメントID）
+    // - `tsupasswd` -> デフォルト16文字のパスワードを出力
+    // - `tsupasswd 24` -> 指定長のパスワードを出力
+    // - `tsupasswd add <url> <user> [password|length] [--title <title>] [--note <note>]` -> DBに保存
+    // - `tsupasswd get <url>` -> URLで検索してユーザID/パスワード/タイトル/備考を取得
+    // - `tsupasswd search <keyword>` -> 部分一致で検索（url/username/title/note）しID付きで一覧
+    // - `tsupasswd update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]` -> レコード更新（idはFirestoreのドキュメントID）
+    // - `tsupasswd delete <id>` -> レコード削除（idはFirestoreのドキュメントID）
     // Rustls 0.23+: 明示的に CryptoProvider をインストール（結果は無視）
     let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -34,10 +34,10 @@ async fn main() {
             if let Err(msg) = ensure_authenticated() { eprintln!("{}", msg); std::process::exit(1); }
             match args.next().as_deref() {
                 Some("add") => {
-                    let rp_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
-                    let credential_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
-                    let user_handle = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
-                    let public_key = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
+                    let rp_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
+                    let credential_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
+                    let user_handle = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
+                    let public_key = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
                     let mut sign_count: i64 = 0;
                     let mut transports: Option<String> = None;
                     while let Some(flag) = args.next() {
@@ -54,16 +54,34 @@ async fn main() {
                     }
                 }
                 Some("get") => {
-                    let rp_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey get <rp_id> <user_handle>"); std::process::exit(1);} };
-                    let user_handle = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey get <rp_id> <user_handle>"); std::process::exit(1);} };
+                    let rp_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey get <rp_id> <user_handle>"); std::process::exit(1);} };
+                    let user_handle = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey get <rp_id> <user_handle>"); std::process::exit(1);} };
+                    let mut json_out = false;
+                    while let Some(flag) = args.next() { if flag == "--json" { json_out = true; } }
                     let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
                     match get_passkeys_by_user(&db, &rp_id, &user_handle).await {
                         Ok(list) => {
                             if list.is_empty() { eprintln!("見つかりませんでした: rp_id={} user_handle={} ", rp_id, user_handle); std::process::exit(1); }
-                            for r in list {
-                                match r.transports.as_deref() {
-                                    Some(t) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, t),
-                                    None => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={}", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count),
+                            if json_out {
+                                let data: Vec<_> = list.into_iter().map(|r| {
+                                    serde_json::json!({
+                                        "id": r.id,
+                                        "rp_id": r.rp_id,
+                                        "credential_id": r.credential_id,
+                                        "user_handle": r.user_handle,
+                                        "public_key": r.public_key,
+                                        "sign_count": r.sign_count,
+                                        "transports": r.transports,
+                                        "created_at": r.created_at,
+                                    })
+                                }).collect();
+                                match serde_json::to_string_pretty(&data) { Ok(s) => println!("{}", s), Err(e) => { eprintln!("JSONエンコードに失敗しました: {}", e); std::process::exit(1); } }
+                            } else {
+                                for r in list {
+                                    match r.transports.as_deref() {
+                                        Some(t) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, t),
+                                        None => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={}", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count),
+                                    }
                                 }
                             }
                         }
@@ -71,15 +89,33 @@ async fn main() {
                     }
                 }
                 Some("search") => {
-                    let keyword = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey search <keyword>"); std::process::exit(1);} };
+                    let keyword = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey search <keyword>"); std::process::exit(1);} };
+                    let mut json_out = false;
+                    while let Some(flag) = args.next() { if flag == "--json" { json_out = true; } }
                     let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
                     match search_passkeys(&db, &keyword).await {
                         Ok(list) => {
                             if list.is_empty() { eprintln!("見つかりませんでした: keyword={}", keyword); std::process::exit(1); }
-                            for r in list {
-                                match r.transports.as_deref() {
-                                    Some(t) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, t),
-                                    None => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={}", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count),
+                            if json_out {
+                                let data: Vec<_> = list.into_iter().map(|r| {
+                                    serde_json::json!({
+                                        "id": r.id,
+                                        "rp_id": r.rp_id,
+                                        "credential_id": r.credential_id,
+                                        "user_handle": r.user_handle,
+                                        "public_key": r.public_key,
+                                        "sign_count": r.sign_count,
+                                        "transports": r.transports,
+                                        "created_at": r.created_at,
+                                    })
+                                }).collect();
+                                match serde_json::to_string_pretty(&data) { Ok(s) => println!("{}", s), Err(e) => { eprintln!("JSONエンコードに失敗しました: {}", e); std::process::exit(1); } }
+                            } else {
+                                for r in list {
+                                    match r.transports.as_deref() {
+                                        Some(t) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, t),
+                                        None => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={}", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count),
+                                    }
                                 }
                             }
                         }
@@ -87,29 +123,29 @@ async fn main() {
                     }
                 }
                 Some("delete") => {
-                    let id = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey delete <id>"); std::process::exit(1);} };
+                    let id = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey delete <id>"); std::process::exit(1);} };
                     let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
                     if let Err(e) = delete_passkey(&db, &id).await { eprintln!("削除に失敗しました: {}", e); std::process::exit(1); } else { println!("削除しました: id={}", id); }
                 }
                 Some("export") => {
-                    let path = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey export <csv_path>"); std::process::exit(1);} };
+                    let path = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey export <csv_path>"); std::process::exit(1);} };
                     let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
                     if let Err(e) = export_passkeys_csv(&db, &path) { eprintln!("エクスポートに失敗しました: {}", e); std::process::exit(1); } else { println!("エクスポート完了: {}", path); }
                 }
                 Some("import") => {
-                    let path = match args.next() { Some(v) => v, None => { eprintln!("使い方: password passkey import <csv_path>"); std::process::exit(1);} };
+                    let path = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey import <csv_path>"); std::process::exit(1);} };
                     let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
                     if let Err(e) = import_passkeys_csv(&db, &path).await { eprintln!("インポートに失敗しました: {}", e); std::process::exit(1); } else { println!("インポート完了: {}", path); }
                 }
                 _ => {
-                    eprintln!("使い方: password passkey <add|get|search|delete|export|import> ...");
+                    eprintln!("使い方: tsupasswd passkey <add|get|search|delete|export|import> ...");
                     std::process::exit(1);
                 }
             }
         }
         Some("export") => {
             if let Err(msg) = ensure_authenticated() { eprintln!("{}", msg); std::process::exit(1); }
-            let path = match args.next() { Some(v) => v, None => { eprintln!("使い方: password export <csv_path>"); std::process::exit(1);} };
+            let path = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd export <csv_path>"); std::process::exit(1);} };
             let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
             if let Err(e) = export_csv(&db, &path) {
                 eprintln!("エクスポートに失敗しました: {}", e);
@@ -120,7 +156,7 @@ async fn main() {
         }
         Some("import") => {
             if let Err(msg) = ensure_authenticated() { eprintln!("{}", msg); std::process::exit(1); }
-            let path = match args.next() { Some(v) => v, None => { eprintln!("使い方: password import <csv_path>"); std::process::exit(1);} };
+            let path = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd import <csv_path>"); std::process::exit(1);} };
             let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
             if let Err(e) = import_csv(&db, &path).await {
                 eprintln!("インポートに失敗しました: {}", e);
@@ -130,7 +166,7 @@ async fn main() {
             }
         }
         Some("auth") => {
-            let secret = match args.next() { Some(v) => v, None => { eprintln!("使い方: password auth <secret> [--ttl MINUTES]"); std::process::exit(1);} };
+            let secret = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd auth <secret> [--ttl MINUTES]"); std::process::exit(1);} };
             let mut ttl: i64 = 30;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
@@ -211,9 +247,11 @@ async fn main() {
         Some("get") => {
             if let Err(msg) = ensure_authenticated() { eprintln!("{}", msg); std::process::exit(1); }
             let url = match args.next() { Some(v) => v, None => {
-                eprintln!("使い方: password get <url>");
+                eprintln!("使い方: tsupasswd get <url>");
                 std::process::exit(1);
             }};
+            let mut json_out = false;
+            while let Some(flag) = args.next() { if flag == "--json" { json_out = true; } }
             let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
             match fetch_by_url(&db, &url).await {
                 Ok(entries) => {
@@ -221,13 +259,24 @@ async fn main() {
                             eprintln!("見つかりませんでした: url={}", url);
                             std::process::exit(1);
                         } else {
-                            for (username, password, title, note) in entries {
-                                // タイトル/備考は存在する場合のみ表示
-                                match (title.as_deref(), note.as_deref()) {
-                                    (Some(t), Some(n)) => println!("user=\"{}\" password=\"{}\" title=\"{}\" note=\"{}\"", username, password, t, n),
-                                    (Some(t), None) => println!("user=\"{}\" password=\"{}\" title=\"{}\"", username, password, t),
-                                    (None, Some(n)) => println!("user=\"{}\" password=\"{}\" note=\"{}\"", username, password, n),
-                                    (None, None) => println!("user=\"{}\" password=\"{}\"", username, password),
+                            if json_out {
+                                let data: Vec<_> = entries.into_iter().map(|(username, password, title, note)| {
+                                    serde_json::json!({
+                                        "username": username,
+                                        "password": password,
+                                        "title": title,
+                                        "note": note,
+                                    })
+                                }).collect();
+                                match serde_json::to_string_pretty(&data) { Ok(s) => println!("{}", s), Err(e) => { eprintln!("JSONエンコードに失敗しました: {}", e); std::process::exit(1); } }
+                            } else {
+                                for (username, password, title, note) in entries {
+                                    match (title.as_deref(), note.as_deref()) {
+                                        (Some(t), Some(n)) => println!("user=\"{}\" password=\"{}\" title=\"{}\" note=\"{}\"", username, password, t, n),
+                                        (Some(t), None) => println!("user=\"{}\" password=\"{}\" title=\"{}\"", username, password, t),
+                                        (None, Some(n)) => println!("user=\"{}\" password=\"{}\" note=\"{}\"", username, password, n),
+                                        (None, None) => println!("user=\"{}\" password=\"{}\"", username, password),
+                                    }
                                 }
                             }
                         }
@@ -238,9 +287,11 @@ async fn main() {
         Some("search") => {
             if let Err(msg) = ensure_authenticated() { eprintln!("{}", msg); std::process::exit(1); }
             let keyword = match args.next() { Some(v) => v, None => {
-                eprintln!("使い方: password search <keyword>");
+                eprintln!("使い方: tsupasswd search <keyword>");
                 std::process::exit(1);
             }};
+            let mut json_out = false;
+            while let Some(flag) = args.next() { if flag == "--json" { json_out = true; } }
             let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
             match search_entries(&db, &keyword).await {
                 Ok(entries) => {
@@ -248,12 +299,25 @@ async fn main() {
                             eprintln!("見つかりませんでした: keyword={}", keyword);
                             std::process::exit(1);
                         } else {
-                            for (id, url, username, title, note) in entries {
-                                match (title.as_deref(), note.as_deref()) {
-                                    (Some(t), Some(n)) => println!("id={} url=\"{}\" user=\"{}\" title=\"{}\" note=\"{}\"", id, url, username, t, n),
-                                    (Some(t), None) => println!("id={} url=\"{}\" user=\"{}\" title=\"{}\"", id, url, username, t),
-                                    (None, Some(n)) => println!("id={} url=\"{}\" user=\"{}\" note=\"{}\"", id, url, username, n),
-                                    (None, None) => println!("id={} url=\"{}\" user=\"{}\"", id, url, username),
+                            if json_out {
+                                let data: Vec<_> = entries.into_iter().map(|(id, url, username, title, note)| {
+                                    serde_json::json!({
+                                        "id": id,
+                                        "url": url,
+                                        "username": username,
+                                        "title": title,
+                                        "note": note,
+                                    })
+                                }).collect();
+                                match serde_json::to_string_pretty(&data) { Ok(s) => println!("{}", s), Err(e) => { eprintln!("JSONエンコードに失敗しました: {}", e); std::process::exit(1); } }
+                            } else {
+                                for (id, url, username, title, note) in entries {
+                                    match (title.as_deref(), note.as_deref()) {
+                                        (Some(t), Some(n)) => println!("id={} url=\"{}\" user=\"{}\" title=\"{}\" note=\"{}\"", id, url, username, t, n),
+                                        (Some(t), None) => println!("id={} url=\"{}\" user=\"{}\" title=\"{}\"", id, url, username, t),
+                                        (None, Some(n)) => println!("id={} url=\"{}\" user=\"{}\" note=\"{}\"", id, url, username, n),
+                                        (None, None) => println!("id={} url=\"{}\" user=\"{}\"", id, url, username),
+                                    }
                                 }
                             }
                         }
@@ -387,9 +451,9 @@ fn session_file_path() -> PathBuf {
 fn ensure_authenticated() -> Result<(), String> {
     match session_status() {
         Ok(Some(rem)) => {
-            if rem <= 0 { Err("セッションが期限切れです。`password auth <secret>` を実行してください".to_string()) } else { Ok(()) }
+            if rem <= 0 { Err("セッションが期限切れです。`tsupasswd auth <secret>` を実行してください".to_string()) } else { Ok(()) }
         }
-        Ok(None) => Err("未認証です。`password auth <secret>` を実行してください".to_string()),
+        Ok(None) => Err("未認証です。`tsupasswd auth <secret>` を実行してください".to_string()),
         Err(e) => Err(format!("認証状態の確認に失敗しました: {}", e)),
     }
 }
