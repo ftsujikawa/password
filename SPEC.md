@@ -2,21 +2,29 @@
 
 ## 概要
 - 本ツールはコマンドラインから安全なパスワードを生成し、SQLiteに「URL・ユーザID・パスワード」を1組として保存・取得できるユーティリティです。さらに、各レコードに任意の**タイトル(title)**と**備考(note)**を付与できます。
-- 主要機能
-  - **パスワード生成**: 乱数で安全なパスワードを出力
-  - **保存**: 生成または手動指定のパスワードをSQLiteへ保存（タイトル/備考付き）
-  - **取得**: URLを指定してユーザID・パスワード・タイトル・備考を取得
+- 併せて、**パスキー(passkey)** 情報（`rp_id`/`credential_id`/`user_handle`/`public_key`/`sign_count`/`transports`）の保存・検索・削除・CSV入出力にも対応します。
+- すべての機密操作はセッション認証が必要です（`password auth <secret>`）。
 
 ## 対象ファイル・構成
 - プロジェクトルート: `password/`
   - 依存設定: `Cargo.toml`
   - 実装: `src/main.rs`
-  - DBファイル: `passwords.db`（プロジェクト直下に自動生成）
+  - DBファイル: `~/.password_cli/passwords.db`（`HOME` 配下に自動生成）
+  - セッションファイル: `~/.password_cli/session`（有効期限UNIX秒を保存）
 
 ## 依存関係
 - `Cargo.toml` の `[dependencies]`
-  - `rand = "0.8"`（安全な乱数生成）
-  - `rusqlite = { version = "0.31", features = ["bundled"] }`（SQLiteバンドル）
+  - `rand = "0.8"`
+  - `tokio = { version = "1", features = ["full"] }`
+  - `serde = { version = "1", features = ["derive"] }`
+  - `chrono = "0.4"`
+  - `futures = "0.3"`
+  - `uuid = { version = "1", features = ["v4"] }`
+  - `rustls = { version = "0.23", features = ["ring"] }`
+  - `rusqlite = { version = "0.31" }`
+  - `chacha20poly1305 = { version = "0.10", features = ["rand_core"] }`
+  - `hkdf = "0.12"`, `sha2 = "0.10"`, `base64 = "0.22"`, `csv = "1.3"`
+  - （開発用）`assert_cmd`, `predicates`, `tempfile`
 
 ## コマンド仕様
 - 実行形式: `cargo run -- [コマンド|引数]`
@@ -28,6 +36,16 @@
     - 仕様: 指定長さのパスワードを生成して標準出力
     - 引数: `<length: usize>`
     - 使用例: `cargo run -- 24`
+  - **認証（auth）**
+    - 仕様: セッションを開始し、期限（分）を設定
+    - 形式: `auth <secret> [--ttl MINUTES]`
+    - 使用例: `cargo run -- auth $AUTH_SECRET --ttl 30`
+  - **ログアウト（logout）**
+    - 仕様: セッションファイルを削除
+    - 使用例: `cargo run -- logout`
+  - **状態（status）**
+    - 仕様: 残り有効秒数を表示
+    - 使用例: `cargo run -- status`
   - **保存（add）**
     - 仕様: URL・ユーザIDとともにパスワードをDBへ保存。任意でタイトル/備考も付与
     - 形式: `add <url> <user> [password|length] [--title <title>] [--note <note>]`
@@ -57,6 +75,23 @@
     - 仕様: 指定した `id` のレコードを削除
     - 形式: `delete <id>`
     - 使用例: `cargo run -- delete 12`
+  - **エクスポート（export）**
+    - 仕様: `passwords` テーブルをCSVへ出力（パスワードは復号して平文で出力）
+    - 形式: `export <csv_path>`
+    - 使用例: `cargo run -- export ./passwords.csv`
+  - **インポート（import）**
+    - 仕様: `passwords` レコードをCSVから取り込み（`created_at` は現在時刻）
+    - 形式: `import <csv_path>`
+    - 使用例: `cargo run -- import ./passwords.csv`
+  - **パスキー（passkey サブコマンド）**
+    - `passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]`
+    - `passkey get <rp_id> <user_handle>`
+    - `passkey search <keyword>`
+    - `passkey delete <id>`
+    - `passkey export <csv_path>`
+    - `passkey import <csv_path>`
+    - 出力例（get/search）:
+      - `id=<ID> rp_id="example.com" credential_id="cred-123" user_handle="user-abc" sign_count=42 transports="usb,nfc"`
 
 ## 振る舞い・出力例
 - 生成のみ
@@ -69,13 +104,16 @@
   - 入力: `cargo run -- get www.example`
   - 出力例（複数件ある場合は新しい順で複数行出力）:
     - `user="user01" password="S3cure!Pass"`
+ - パスキー取得
+   - 入力: `cargo run -- passkey get example.com user-abc`
+   - 出力例: `id=<ID> rp_id="example.com" credential_id="cred-123" user_handle="user-abc" sign_count=42 transports="usb,nfc"`
 
 ## 実装詳細（関数・処理）
 - ファイル: `src/main.rs`
   - CLI分岐: `main()`
-    - `add`/`get`/数値（長さ）/未指定の分岐を実装。
-    - `add`は `--title`/`--note` オプションを受け付ける。
-    - `search`/`update`/`delete` を追加。
+    - `auth`/`logout`/`status` によるセッション管理。
+    - `add`/`get`/`search`/`update`/`delete`/`export`/`import`（パスワード用）。
+    - `passkey` サブコマンド群: `add`/`get`/`search`/`delete`/`export`/`import`。
   - パスワード生成: `generate_password(len: usize) -> String`
     - 文字集合:
       - `UPPER`: `A-Z`
@@ -89,34 +127,41 @@
       - 残りは全体集合からランダムに補充
       - 最後にFisher-Yatesでシャッフル
     - 乱数源: `rand::rngs::OsRng` を用いたリジェクションサンプリング（偏り防止）
-  - DB初期化: `init_db() -> rusqlite::Result<Connection>`
-    - DBファイル: `passwords.db`
-    - テーブル自動生成: `passwords`
-      - スキーマは後述
-  - 保存: `insert_password(conn, url, username, password, title, note) -> rusqlite::Result<()>`
-    - `INSERT INTO passwords (url, username, password, title, note) VALUES (?1, ?2, ?3, ?4, ?5)`
-  - 取得: `fetch_by_url(conn, url) -> rusqlite::Result<Vec<(String, String, Option<String>, Option<String>)>>`
-    - `SELECT username, password, NULLIF(title, ''), NULLIF(note, '') FROM passwords WHERE url = ?1 ORDER BY created_at DESC, id DESC`
-  - 部分一致検索: `search_entries(conn, keyword) -> rusqlite::Result<Vec<(i64, String, String, Option<String>, Option<String>)>>`
-    - `SELECT id, url, username, NULLIF(title, ''), NULLIF(note, '') FROM passwords WHERE url LIKE ?1 OR username LIKE ?1 OR title LIKE ?1 OR note LIKE ?1 ORDER BY created_at DESC, id DESC`
-  - 更新: `update_entry(conn, id, url, username, password, title, note) -> rusqlite::Result<()>`
-    - 動的に`SET`句を組み立て、指定されたフィールドのみ更新
-  - 削除: `delete_entry(conn, id) -> rusqlite::Result<()>`
+  - DB初期化: `init_db()`
+    - DBファイル: `~/.password_cli/passwords.db`
+    - テーブル自動生成: `passwords`, `passkeys`
+  - パスワード保存: `insert_password()`
+    - 保存時に `encrypt_for_id(id, password)` を用いて暗号化して格納
+  - 取得: `fetch_by_url()`
+    - 取得時に `decrypt_for_id(id, enc_pw)` で復号（失敗時は暗号文のまま出力）
+  - 検索: `search_entries()`（`id/url/username/title/note` の部分一致）
+  - 更新: `update_entry()`（指定項目のみ更新、パスワードは再暗号化）
+  - 削除: `delete_entry()`
+  - CSV: `export_csv()` / `import_csv()`（パスワードはCSVでは平文）
+  - パスキー: `insert_passkey()` / `get_passkeys_by_user()` / `search_passkeys()` / `delete_passkey()` / `export_passkeys_csv()` / `import_passkeys_csv()`
   - エラーメッセージ表示・終了:
     - 失敗時は標準エラー出力にメッセージを出し、`exit(1)` で終了
     - 使用例ヘルプ: `print_add_usage_and_exit()`（`--title`/`--note`を含む）
 
 ## データベース仕様
-- DBファイル: `passwords.db`
+- DBファイル: `~/.password_cli/passwords.db`
 - テーブル: `passwords`
-  - `id INTEGER PRIMARY KEY AUTOINCREMENT`
+  - `id TEXT PRIMARY KEY`
   - `url TEXT NOT NULL`
   - `username TEXT NOT NULL`
-  - `password TEXT NOT NULL`
-  - `title TEXT`（任意）
-  - `note TEXT`（任意）
-  - `created_at TEXT NOT NULL DEFAULT (datetime('now'))`
-- インデックス: なし（必要に応じて `url` へ追加可能）
+  - `password TEXT NOT NULL`（暗号化済み）
+  - `title TEXT`
+  - `note TEXT`
+  - `created_at TEXT NOT NULL`
+- テーブル: `passkeys`
+  - `id TEXT PRIMARY KEY`
+  - `rp_id TEXT NOT NULL`
+  - `credential_id TEXT NOT NULL`
+  - `user_handle TEXT NOT NULL`
+  - `public_key TEXT NOT NULL`
+  - `sign_count INTEGER NOT NULL`
+  - `transports TEXT`（CSV文字列, 任意）
+  - `created_at TEXT NOT NULL`
 
 ## セキュリティ方針
 - 乱数: `OsRng`（OSのCSPRNG）を使用
@@ -124,15 +169,18 @@
   - カテゴリ混在を保障（可能な範囲）
   - リジェクションサンプリングで指数バイアスの回避
   - シャッフルで先頭固定回避
-- 現状は**平文保存・平文表示**。運用環境では暗号化やキーチェーン連携を推奨（拡張案参照）。
+- パスワードは**保存時に暗号化**、取得時に復号
+  - 鍵導出: `HKDF-SHA256` で `salt=id`、`ikm=AUTH_SECRET`、`info="password-at-rest"`
+  - 方式: `ChaCha20-Poly1305`（12Bランダムノンス + 本文 + 認証タグ）をBase64で保存
+- 認証: `password auth <secret>` 実行時に `~/.password_cli/session` に有効期限を書き込み、各コマンド開始時に `ensure_authenticated()` で検証
 
 ## エラーハンドリング・終了コード
 - 正常終了: `0`
 - エラー終了: `1`
   - DB初期化失敗、保存失敗、取得失敗、見つからない、引数不足など
+  - 未認証、セッション期限切れ
 
 ## 制限事項・既知の注意点
-- パスワードの暗号化保存は未対応
 - URL完全一致検索（部分一致は未実装）
 - 複数アカウントが同一URLに紐づく場合、**新しい順**に複数行を出力
 - `SYMBOL`に含まれない記号が必要な場合は `SYMBOL` を編集
@@ -150,7 +198,7 @@
 - ファイル:
   - 実装: `src/main.rs`
   - 依存: `Cargo.toml`
-  - DB: `passwords.db`
+  - DB: `~/.password_cli/passwords.db`
 
 ## テスト例（手動）
 - 生成: `cargo run -- 20`
@@ -161,3 +209,9 @@
  - 検索: `cargo run -- search example`
  - 更新: `cargo run -- update 1 --length 24 --title "Rotated"`
  - 削除: `cargo run -- delete 1`
+
+## テスト（自動）
+- 統合テスト: `tests/passkey_cli.rs`
+  - セッション開始後、`passkey add/get/search/export/delete` の一連を検証
+  - テストごとに `HOME` を一時ディレクトリ、`AUTH_SECRET` を固定
+  - 実行: `cargo test`
