@@ -650,14 +650,14 @@ async fn delete_entry(db: &Connection, id: &str) -> Result<(), Box<dyn std::erro
 
 fn print_add_usage_and_exit() {
     eprintln!(
-        "使い方: password add <url> <username> [password|length] [--title <title>] [--note <note>]"
+        "使い方: tsupasswd add <url> <username> [password|length] [--title <title>] [--note <note>]"
     );
     std::process::exit(1);
 }
 
 fn db_file_path() -> PathBuf {
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".password_cli").join("passwords.db")
+    PathBuf::from(home).join(".tsupasswd_db").join("passwords.db")
 }
 
 fn export_csv(db: &Connection, path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
