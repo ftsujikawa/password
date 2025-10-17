@@ -14,12 +14,14 @@ use sha2::Sha256;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use csv::{ReaderBuilder, WriterBuilder};
 
+// 標準のprintln!/eprintln!をそのまま使用する
+
 #[tokio::main]
 async fn main() {
     // CLI:
     // - `tsupasswd` -> デフォルト16文字のパスワードを出力
     // - `tsupasswd 24` -> 指定長のパスワードを出力
-    // - `tsupasswd add <url> <user> [password|length] [--title <title>] [--note <note>]` -> DBに保存
+    // - `tsupasswd add <url> <username> [password|length] [--title <title>] [--note <note>]` -> DBに保存
     // - `tsupasswd get <url>` -> URLで検索してユーザID/パスワード/タイトル/備考を取得
     // - `tsupasswd search <keyword>` -> 部分一致で検索（url/username/title/note）しID付きで一覧
     // - `tsupasswd update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]` -> レコード更新（idはFirestoreのドキュメントID）
@@ -27,7 +29,9 @@ async fn main() {
     // Rustls 0.23+: 明示的に CryptoProvider をインストール（結果は無視）
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let mut args = env::args();
+    // 引数を収集してログに追記
+    let all_args: Vec<String> = env::args().collect();
+    let mut args = all_args.clone().into_iter();
     let _prog = args.next();
     match args.next().as_deref() {
         Some("passkey") => {
@@ -241,7 +245,7 @@ async fn main() {
                 eprintln!("保存に失敗しました: {}", e);
                 std::process::exit(1);
             } else {
-                println!("保存しました: url={} user={}", url, username);
+                println!("保存しました: url={} username={}", url, username);
             }
         }
         Some("get") => {
@@ -272,10 +276,10 @@ async fn main() {
                             } else {
                                 for (username, password, title, note) in entries {
                                     match (title.as_deref(), note.as_deref()) {
-                                        (Some(t), Some(n)) => println!("user=\"{}\" password=\"{}\" title=\"{}\" note=\"{}\"", username, password, t, n),
-                                        (Some(t), None) => println!("user=\"{}\" password=\"{}\" title=\"{}\"", username, password, t),
-                                        (None, Some(n)) => println!("user=\"{}\" password=\"{}\" note=\"{}\"", username, password, n),
-                                        (None, None) => println!("user=\"{}\" password=\"{}\"", username, password),
+                                        (Some(t), Some(n)) => println!("username=\"{}\" password=\"{}\" title=\"{}\" note=\"{}\"", username, password, t, n),
+                                        (Some(t), None) => println!("username=\"{}\" password=\"{}\" title=\"{}\"", username, password, t),
+                                        (None, Some(n)) => println!("username=\"{}\" password=\"{}\" note=\"{}\"", username, password, n),
+                                        (None, None) => println!("username=\"{}\" password=\"{}\"", username, password),
                                     }
                                 }
                             }
@@ -300,23 +304,24 @@ async fn main() {
                             std::process::exit(1);
                         } else {
                             if json_out {
-                                let data: Vec<_> = entries.into_iter().map(|(id, url, username, title, note)| {
+                                let data: Vec<_> = entries.into_iter().map(|(id, url, username, password, title, note)| {
                                     serde_json::json!({
                                         "id": id,
                                         "url": url,
                                         "username": username,
+                                        "password": password,
                                         "title": title,
                                         "note": note,
                                     })
                                 }).collect();
                                 match serde_json::to_string_pretty(&data) { Ok(s) => println!("{}", s), Err(e) => { eprintln!("JSONエンコードに失敗しました: {}", e); std::process::exit(1); } }
                             } else {
-                                for (id, url, username, title, note) in entries {
+                                for (id, url, username, password, title, note) in entries {
                                     match (title.as_deref(), note.as_deref()) {
-                                        (Some(t), Some(n)) => println!("id={} url=\"{}\" user=\"{}\" title=\"{}\" note=\"{}\"", id, url, username, t, n),
-                                        (Some(t), None) => println!("id={} url=\"{}\" user=\"{}\" title=\"{}\"", id, url, username, t),
-                                        (None, Some(n)) => println!("id={} url=\"{}\" user=\"{}\" note=\"{}\"", id, url, username, n),
-                                        (None, None) => println!("id={} url=\"{}\" user=\"{}\"", id, url, username),
+                                        (Some(t), Some(n)) => println!("id={} url=\"{}\" username=\"{}\" password=\"{}\" title=\"{}\" note=\"{}\"", id, url, username, password, t, n),
+                                        (Some(t), None) => println!("id={} url=\"{}\" username=\"{}\" password=\"{}\" title=\"{}\"", id, url, username, password, t),
+                                        (None, Some(n)) => println!("id={} url=\"{}\" username=\"{}\" password=\"{}\" note=\"{}\"", id, url, username, password, n),
+                                        (None, None) => println!("id={} url=\"{}\" username=\"{}\" password=\"{}\"", id, url, username, password),
                                     }
                                 }
                             }
@@ -448,6 +453,8 @@ fn session_file_path() -> PathBuf {
     PathBuf::from(home).join(".password_cli").join("session")
 }
 
+// 引数や標準出力をファイルへ記録する機能は削除済み
+
 fn ensure_authenticated() -> Result<(), String> {
     match session_status() {
         Ok(Some(rem)) => {
@@ -571,23 +578,24 @@ async fn fetch_by_url(db: &Connection, url: &str) -> Result<Vec<(String, String,
     Ok(out)
 }
 
-async fn search_entries(db: &Connection, keyword: &str) -> Result<Vec<(String, String, String, Option<String>, Option<String>)>, Box<dyn std::error::Error + Send + Sync>> {
+async fn search_entries(db: &Connection, keyword: &str) -> Result<Vec<(String, String, String, String, Option<String>, Option<String>)>, Box<dyn std::error::Error + Send + Sync>> {
     let like = format!("%{}%", keyword);
     let mut stmt = db.prepare(&format!(
-        "SELECT id, url, username, title, note FROM {} WHERE 
+        "SELECT id, url, username, password, title, note FROM {} WHERE 
             id LIKE ?1 OR url LIKE ?1 OR username LIKE ?1 OR IFNULL(title,'') LIKE ?1 OR IFNULL(note,'') LIKE ?1 ",
         COLLECTION
     ))?;
     let rows = stmt.query_map(params![like], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, Option<String>>(3)?,
-            row.get::<_, Option<String>>(4)?,
-        ))
+        let id: String = row.get(0)?;
+        let url: String = row.get(1)?;
+        let username: String = row.get(2)?;
+        let enc_pw: String = row.get(3)?;
+        let title: Option<String> = row.get(4)?;
+        let note: Option<String> = row.get(5)?;
+        let pw = decrypt_for_id(&id, &enc_pw).unwrap_or(enc_pw);
+        Ok((id, url, username, pw, title, note))
     })?;
-    let mut out: Vec<(String, String, String, Option<String>, Option<String>)> = Vec::new();
+    let mut out: Vec<(String, String, String, String, Option<String>, Option<String>)> = Vec::new();
     for r in rows { out.push(r?); }
     // created_at降順の代わりに id 降順で簡易並び替え
     out.sort_by(|a, b| b.0.cmp(&a.0));
@@ -642,7 +650,7 @@ async fn delete_entry(db: &Connection, id: &str) -> Result<(), Box<dyn std::erro
 
 fn print_add_usage_and_exit() {
     eprintln!(
-        "使い方: password add <url> <user> [password|length] [--title <title>] [--note <note>]"
+        "使い方: password add <url> <username> [password|length] [--title <title>] [--note <note>]"
     );
     std::process::exit(1);
 }
