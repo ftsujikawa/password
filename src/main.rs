@@ -545,6 +545,43 @@ async fn insert_password(
     title: Option<&str>,
     note: Option<&str>,
 ) -> Result<PasswordRecord, Box<dyn std::error::Error + Send + Sync>> {
+    // 既存URLの有無を確認（最新の1件）
+    if let Some((existing_id, existing_title, existing_note, created_at)) = {
+        let mut stmt = db.prepare(&format!(
+            "SELECT id, title, note, created_at FROM {} WHERE url = ?1 ORDER BY created_at DESC LIMIT 1",
+            COLLECTION
+        ))?;
+        stmt
+            .query_row(params![url], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .optional()?
+    } {
+        // 更新：username/passwordは上書き、title/noteは新規指定があれば上書き、未指定は既存維持
+        let new_title = title.map(|s| s.to_string()).or(existing_title);
+        let new_note = note.map(|s| s.to_string()).or(existing_note);
+        let enc_pw = encrypt_for_id(&existing_id, password)?;
+        db.execute(
+            &format!("UPDATE {} SET username=?1, password=?2, title=?3, note=?4 WHERE id=?5", COLLECTION),
+            params![username, enc_pw, new_title, new_note, existing_id],
+        )?;
+        return Ok(PasswordRecord {
+            id: existing_id,
+            url: url.to_string(),
+            username: username.to_string(),
+            password: enc_pw,
+            title: new_title,
+            note: new_note,
+            created_at,
+        });
+    }
+
+    // 新規挿入
     let id = uuid::Uuid::new_v4().to_string();
     let rec = PasswordRecord {
         id: id.clone(),
@@ -556,7 +593,10 @@ async fn insert_password(
         created_at: Utc::now().to_rfc3339(),
     };
     db.execute(
-        &format!("INSERT INTO {} (id, url, username, password, title, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", COLLECTION),
+        &format!(
+            "INSERT INTO {} (id, url, username, password, title, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            COLLECTION
+        ),
         params![rec.id, rec.url, rec.username, rec.password, rec.title, rec.note, rec.created_at],
     )?;
     Ok(rec)
