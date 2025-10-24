@@ -14,10 +14,115 @@ use sha2::Sha256;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use csv::{ReaderBuilder, WriterBuilder};
 
-// 標準のprintln!/eprintln!をそのまま使用する
+// WindowsのみShift-JISで出力するためにprintln!/eprintln!をローカルでラップ
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum OutEnc { Utf8, Sjis }
+
+fn decide_encoding() -> OutEnc {
+    if let Ok(v) = std::env::var("TSUPASSWD_ENCODING") {
+        match v.to_ascii_lowercase().as_str() {
+            "sjis" | "shift_jis" | "shift-jis" | "cp932" | "932" => return OutEnc::Sjis,
+            "utf8" | "utf-8" | "65001" => return OutEnc::Utf8,
+            _ => {}
+        }
+    }
+    #[cfg(windows)]
+    {
+        if std::env::var("WT_SESSION").is_ok() { return OutEnc::Utf8; }
+        if let Ok(tp) = std::env::var("TERM_PROGRAM") {
+            let tp = tp.to_ascii_lowercase();
+            if tp == "vscode" || tp == "windows_terminal" || tp == "windows terminal" { return OutEnc::Utf8; }
+        }
+        let cp = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
+        if cp == 932 { OutEnc::Sjis } else { OutEnc::Utf8 }
+    }
+    #[cfg(not(windows))]
+    { OutEnc::Utf8 }
+}
+#[cfg(windows)]
+fn print_encoded(line: String, is_err: bool) {
+    use std::io::{self, Write};
+    use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, WriteConsoleW, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+    unsafe {
+        let handle = if is_err { GetStdHandle(STD_ERROR_HANDLE) } else { GetStdHandle(STD_OUTPUT_HANDLE) };
+        let mut mode: u32 = 0;
+        // コンソールに直結している場合は UTF-16 で直接出力
+        if handle != std::ptr::null_mut() && GetConsoleMode(handle, &mut mode) != 0 {
+            let mut wide: Vec<u16> = line.encode_utf16().collect();
+            // 行末にCRLF追加
+            wide.push('\r' as u16);
+            wide.push('\n' as u16);
+            let mut written: u32 = 0;
+            let _ = WriteConsoleW(handle, wide.as_ptr() as *const _, wide.len() as u32, &mut written as *mut u32, std::ptr::null());
+            return;
+        }
+    }
+    // リダイレクト・パイプ時はバイト列で出力（環境変数で選択）
+    match decide_encoding() {
+        OutEnc::Sjis => {
+            let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(&line);
+            if is_err {
+                let _ = io::stderr().write_all(&bytes);
+                let _ = io::stderr().write_all(b"\r\n");
+                let _ = io::stderr().flush();
+            } else {
+                let _ = io::stdout().write_all(&bytes);
+                let _ = io::stdout().write_all(b"\r\n");
+                let _ = io::stdout().flush();
+            }
+        }
+        OutEnc::Utf8 => {
+            if is_err { let _ = writeln!(io::stderr(), "{}", line); }
+            else { let _ = writeln!(io::stdout(), "{}", line); }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn print_encoded(line: String, is_err: bool) {
+    use std::io::{self, Write};
+    if is_err {
+        let _ = writeln!(io::stderr(), "{}", line);
+    } else {
+        let _ = writeln!(io::stdout(), "{}", line);
+    }
+}
+
+macro_rules! println {
+    ($($arg:tt)*) => {{
+        let s = format!($($arg)*);
+        crate::print_encoded(s, false);
+    }};
+}
+
+macro_rules! eprintln {
+    ($($arg:tt)*) => {{
+        let s = format!($($arg)*);
+        crate::print_encoded(s, true);
+    }};
+}
 
 #[tokio::main]
 async fn main() {
+    // 端末のコードページは実行時に検出して出力側で切替
+    // パニック時のメッセージもエンコードして出力
+    std::panic::set_hook(Box::new(|info| {
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "panic occurred".to_string()
+        };
+        #[cfg(windows)]
+        {
+            crate::print_encoded(format!("panic: {}", msg), true);
+        }
+        #[cfg(not(windows))]
+        {
+            eprintln!("panic: {}", msg);
+        }
+    }));
     // CLI:
     // - `tsupasswd` -> デフォルト16文字のパスワードを出力
     // - `tsupasswd 24` -> 指定長のパスワードを出力
@@ -449,7 +554,15 @@ fn fisher_yates_shuffle(data: &mut [u8]) {
 const COLLECTION: &str = "passwords"; // SQLiteのテーブル名としても使用
 
 fn session_file_path() -> PathBuf {
-    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    if cfg!(windows) {
+        if let Ok(dir) = env::var("LOCALAPPDATA") {
+            return PathBuf::from(dir).join("tsupasswd").join("session");
+        }
+        if let Ok(up) = env::var("USERPROFILE") {
+            return PathBuf::from(up).join("AppData").join("Local").join("tsupasswd").join("session");
+        }
+    }
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".password_cli").join("session")
 }
 
