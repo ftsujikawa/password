@@ -16,8 +16,10 @@ use csv::{ReaderBuilder, WriterBuilder};
 
 // WindowsのみShift-JISで出力するためにprintln!/eprintln!をローカルでラップ
 #[derive(Copy, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 enum OutEnc { Utf8, Sjis }
 
+#[allow(dead_code)]
 fn decide_encoding() -> OutEnc {
     if let Ok(v) = std::env::var("TSUPASSWD_ENCODING") {
         match v.to_ascii_lowercase().as_str() {
