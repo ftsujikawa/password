@@ -104,6 +104,94 @@ macro_rules! eprintln {
     }};
 }
 
+fn print_usage() {
+    println!("使い方:");
+    println!("  tsupasswd [長さ]");
+    println!("  tsupasswd add <url> <username> [password|length] [--title <title>] [--note <note>]");
+    println!("  tsupasswd get <url> [--json]");
+    println!("  tsupasswd search <keyword> [--json]");
+    println!("  tsupasswd update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]");
+    println!("  tsupasswd delete <id>");
+    println!("  tsupasswd export <csv_path>");
+    println!("  tsupasswd import <csv_path>");
+    println!("  tsupasswd auth <secret> [--ttl MINUTES]");
+    println!("  tsupasswd logout");
+    println!("  tsupasswd status");
+    println!("  tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]");
+    println!("  tsupasswd passkey get <rp_id> <user_handle> [--json]");
+    println!("  tsupasswd passkey search <keyword> [--json]");
+    println!("  tsupasswd passkey delete <id>");
+    println!("  tsupasswd passkey export <csv_path>");
+    println!("  tsupasswd passkey import <csv_path>");
+    println!("");
+    println!("共通オプション:");
+    println!("  -h, --help    このヘルプを表示");
+    println!("");
+    println!("コマンド詳細:");
+    println!("  tsupasswd [長さ]");
+    println!("    引数:");
+    println!("      長さ              生成するパスワードの文字数（省略時 16）");
+    println!("");
+    println!("  tsupasswd add <url> <username> [password|length] [--title <title>] [--note <note>]");
+    println!("    引数:");
+    println!("      url               サイトURL等の識別子");
+    println!("      username          ユーザ名");
+    println!("      password|length   文字列を指定するとそのまま保存、数値を指定するとその長さで生成");
+    println!("    オプション:");
+    println!("      --title <title>   タイトル");
+    println!("      --note <note>     備考");
+    println!("");
+    println!("  tsupasswd get <url> [--json]");
+    println!("    オプション:");
+    println!("      --json            JSON形式で出力");
+    println!("");
+    println!("  tsupasswd search <keyword> [--json]");
+    println!("    オプション:");
+    println!("      --json            JSON形式で出力");
+    println!("");
+    println!("  tsupasswd update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]");
+    println!("    オプション:");
+    println!("      --url U           URL を更新");
+    println!("      --user NAME       ユーザ名を更新");
+    println!("      --password PASS   パスワードをこの文字列に更新");
+    println!("      --length N        ランダムに N 文字のパスワードを生成して更新");
+    println!("      --title T         タイトルを更新");
+    println!("      --note N          備考を更新");
+    println!("");
+    println!("  tsupasswd delete <id>");
+    println!("");
+    println!("  tsupasswd export <csv_path>");
+    println!("");
+    println!("  tsupasswd import <csv_path>");
+    println!("");
+    println!("  tsupasswd auth <secret> [--ttl MINUTES]");
+    println!("    オプション:");
+    println!("      --ttl MINUTES     セッション有効期限（分） デフォルト 30");
+    println!("");
+    println!("  tsupasswd logout");
+    println!("  tsupasswd status");
+    println!("");
+    println!("  tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]");
+    println!("    オプション:");
+    println!("      --sign-count N    認証器のサインカウント");
+    println!("      --transports CSV  transports をカンマ区切りで指定");
+    println!("");
+    println!("  tsupasswd passkey get <rp_id> <user_handle> [--json]");
+    println!("    オプション:");
+    println!("      --json            JSON形式で出力");
+    println!("");
+    println!("  tsupasswd passkey search <keyword> [--json]");
+    println!("    オプション:");
+    println!("      --json            JSON形式で出力");
+    println!("");
+    println!("  tsupasswd passkey delete <id>");
+    println!("  tsupasswd passkey export <csv_path>");
+    println!("  tsupasswd passkey import <csv_path>");
+    println!("");
+    println!("環境変数:");
+    println!("  AUTH_SECRET           認証用シークレット（tsupasswd auth で使用）");
+    println!("  TSUPASSWD_ENCODING    出力エンコーディングを指定（utf8 / sjis）。Windowsでのリダイレクト時に有効");
+}
 #[tokio::main]
 async fn main() {
     // 端末のコードページは実行時に検出して出力側で切替
@@ -140,7 +228,12 @@ async fn main() {
     let all_args: Vec<String> = env::args().collect();
     let mut args = all_args.clone().into_iter();
     let _prog = args.next();
-    match args.next().as_deref() {
+    let first = args.next();
+    if matches!(first.as_deref(), Some("--help") | Some("-h") | Some("help")) {
+        print_usage();
+        return;
+    }
+    match first.as_deref() {
         Some("passkey") => {
             if let Err(msg) = ensure_authenticated() { eprintln!("{}", msg); std::process::exit(1); }
             match args.next().as_deref() {
