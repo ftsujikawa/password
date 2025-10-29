@@ -102,6 +102,47 @@
     - 出力例（get/search）:
       - `id=<ID> rp_id="example.com" credential_id="cred-123" user_handle="user-abc" sign_count=42 transports="usb,nfc"`
 
+### ヘルプ表示（--help/-h/help）
+
+`tsupasswd --help` などで、全コマンド・サブコマンドと主要オプションを一覧表示します。
+
+```
+使い方:
+  tsupasswd [長さ]
+  tsupasswd add <url> <username> [password|length] [--title <title>] [--note <note>]
+  tsupasswd get <url> [--json]
+  tsupasswd search <keyword> [--json]
+  tsupasswd update <id> [--url U] [--user NAME] [--password PASS | --length N] [--title T] [--note N]
+  tsupasswd delete <id>
+  tsupasswd export <csv_path>
+  tsupasswd import <csv_path>
+  tsupasswd auth <secret> [--ttl MINUTES]
+  tsupasswd logout
+  tsupasswd status
+  tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]
+  tsupasswd passkey get <rp_id> <user_handle> [--json]
+  tsupasswd passkey search <keyword> [--json]
+  tsupasswd passkey delete <id>
+  tsupasswd passkey export <csv_path>
+  tsupasswd passkey import <csv_path>
+
+共通オプション:
+  -h, --help    このヘルプを表示
+
+コマンド詳細の主なオプション:
+  add:     --title <title>, --note <note>
+  get:     --json
+  search:  --json
+  update:  --url U, --user NAME, --password PASS | --length N, --title T, --note N
+  auth:    --ttl MINUTES
+  passkey add: --sign-count N, --transports CSV
+  passkey get/search: --json
+
+環境変数:
+  AUTH_SECRET        認証用シークレット（tsupasswd auth で使用）
+  TSUPASSWD_ENCODING 出力エンコーディング（utf8 / sjis）。Windowsのリダイレクト/パイプ時に有効
+```
+
 ## 振る舞い・出力例
 - 生成のみ
   - 入力: `cargo run -- 16`
@@ -112,7 +153,7 @@
 - 取得
   - 入力: `cargo run -- get www.example`
   - 出力例（複数件ある場合は新しい順で複数行出力）:
-    - `user="user01" password="S3cure!Pass"`
+    - `username="user01" password="S3cure!Pass"`
  - パスキー取得
    - 入力: `cargo run -- passkey get example.com user-abc`
    - 出力例: `id=<ID> rp_id="example.com" credential_id="cred-123" user_handle="user-abc" sign_count=42 transports="usb,nfc"`
