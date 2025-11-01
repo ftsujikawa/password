@@ -117,7 +117,7 @@ fn print_usage() {
     println!("  tsupasswd auth <secret> [--ttl MINUTES]");
     println!("  tsupasswd logout");
     println!("  tsupasswd status");
-    println!("  tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]");
+    println!("  tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV] [--title T]");
     println!("  tsupasswd passkey get <rp_id> <user_handle> [--json]");
     println!("  tsupasswd passkey search <keyword> [--json]");
     println!("  tsupasswd passkey delete <id>");
@@ -171,10 +171,11 @@ fn print_usage() {
     println!("  tsupasswd logout");
     println!("  tsupasswd status");
     println!("");
-    println!("  tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]");
+    println!("  tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV] [--title T]");
     println!("    オプション:");
     println!("      --sign-count N    認証器のサインカウント");
     println!("      --transports CSV  transports をカンマ区切りで指定");
+    println!("      --title T         タイトル");
     println!("");
     println!("  tsupasswd passkey get <rp_id> <user_handle> [--json]");
     println!("    オプション:");
@@ -238,22 +239,29 @@ async fn main() {
             if let Err(msg) = ensure_authenticated() { eprintln!("{}", msg); std::process::exit(1); }
             match args.next().as_deref() {
                 Some("add") => {
-                    let rp_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
-                    let credential_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
-                    let user_handle = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
-                    let public_key = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]"); std::process::exit(1);} };
+                    let rp_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV] [--title T]"); std::process::exit(1);} };
+                    let credential_id = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV] [--title T]"); std::process::exit(1);} };
+                    let user_handle = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV] [--title T]"); std::process::exit(1);} };
+                    let public_key = match args.next() { Some(v) => v, None => { eprintln!("使い方: tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV] [--title T]"); std::process::exit(1);} };
                     let mut sign_count: i64 = 0;
+                    let mut title: Option<String> = None;
                     let mut transports: Option<String> = None;
                     while let Some(flag) = args.next() {
                         match flag.as_str() {
                             "--sign-count" => { if let Some(n) = args.next().and_then(|s| s.parse::<i64>().ok()) { sign_count = n.max(0); } }
+                            "--title" => { title = args.next(); }
                             "--transports" => { transports = args.next(); }
                             _ => {}
                         }
                     }
                     let db = match init_db().await { Ok(db) => db, Err(e) => { eprintln!("DB初期化に失敗しました: {}", e); std::process::exit(1);} };
-                    match insert_passkey(&db, &rp_id, &credential_id, &user_handle, &public_key, sign_count, transports.as_deref()).await {
-                        Ok(rec) => { println!("保存しました: id={} rp_id=\"{}\" user_handle=\"{}\"", rec.id, rec.rp_id, rec.user_handle); }
+                    match insert_passkey(&db, &rp_id, &credential_id, &user_handle, &public_key, sign_count, title.as_deref(), transports.as_deref()).await {
+                        Ok(rec) => {
+                            match rec.title.as_deref() {
+                                Some(ttl) => println!("保存しました: id={} rp_id=\"{}\" user_handle=\"{}\" title=\"{}\"", rec.id, rec.rp_id, rec.user_handle, ttl),
+                                None => println!("保存しました: id={} rp_id=\"{}\" user_handle=\"{}\"", rec.id, rec.rp_id, rec.user_handle),
+                            }
+                        }
                         Err(e) => { eprintln!("保存に失敗しました: {}", e); std::process::exit(1); }
                     }
                 }
@@ -275,6 +283,7 @@ async fn main() {
                                         "user_handle": r.user_handle,
                                         "public_key": r.public_key,
                                         "sign_count": r.sign_count,
+                                        "title": r.title,
                                         "transports": r.transports,
                                         "created_at": r.created_at,
                                     })
@@ -282,9 +291,11 @@ async fn main() {
                                 match serde_json::to_string_pretty(&data) { Ok(s) => println!("{}", s), Err(e) => { eprintln!("JSONエンコードに失敗しました: {}", e); std::process::exit(1); } }
                             } else {
                                 for r in list {
-                                    match r.transports.as_deref() {
-                                        Some(t) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, t),
-                                        None => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={}", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count),
+                                    match (r.title.as_deref(), r.transports.as_deref()) {
+                                        (Some(ttl), Some(t)) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} title=\"{}\" transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, ttl, t),
+                                        (Some(ttl), None) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} title=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, ttl),
+                                        (None, Some(t)) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, t),
+                                        (None, None) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={}", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count),
                                     }
                                 }
                             }
@@ -309,6 +320,7 @@ async fn main() {
                                         "user_handle": r.user_handle,
                                         "public_key": r.public_key,
                                         "sign_count": r.sign_count,
+                                        "title": r.title,
                                         "transports": r.transports,
                                         "created_at": r.created_at,
                                     })
@@ -316,9 +328,11 @@ async fn main() {
                                 match serde_json::to_string_pretty(&data) { Ok(s) => println!("{}", s), Err(e) => { eprintln!("JSONエンコードに失敗しました: {}", e); std::process::exit(1); } }
                             } else {
                                 for r in list {
-                                    match r.transports.as_deref() {
-                                        Some(t) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, t),
-                                        None => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={}", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count),
+                                    match (r.title.as_deref(), r.transports.as_deref()) {
+                                        (Some(ttl), Some(t)) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} title=\"{}\" transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, ttl, t),
+                                        (Some(ttl), None) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} title=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, ttl),
+                                        (None, Some(t)) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={} transports=\"{}\"", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count, t),
+                                        (None, None) => println!("id={} rp_id=\"{}\" credential_id=\"{}\" user_handle=\"{}\" sign_count={}", r.id, r.rp_id, r.credential_id, r.user_handle, r.sign_count),
                                     }
                                 }
                             }
@@ -737,11 +751,14 @@ async fn init_db() -> Result<Connection, Box<dyn std::error::Error + Send + Sync
             user_handle TEXT NOT NULL,
             public_key TEXT NOT NULL,
             sign_count INTEGER NOT NULL,
+            title TEXT,
             transports TEXT,
             created_at TEXT NOT NULL
         )",
         [],
     )?;
+    // 既存DBへの後方互換: title列が無い場合に追加
+    let _ = conn.execute("ALTER TABLE passkeys ADD COLUMN title TEXT", []);
     Ok(conn)
 }
 
@@ -971,6 +988,8 @@ struct PasskeyRecord {
     public_key: String,
     sign_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     transports: Option<String>,
     created_at: String,
 }
@@ -982,6 +1001,7 @@ async fn insert_passkey(
     user_handle: &str,
     public_key: &str,
     sign_count: i64,
+    title: Option<&str>,
     transports: Option<&str>,
 ) -> Result<PasskeyRecord, Box<dyn std::error::Error + Send + Sync>> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -992,12 +1012,13 @@ async fn insert_passkey(
         user_handle: user_handle.to_string(),
         public_key: public_key.to_string(),
         sign_count,
+        title: title.map(|s| s.to_string()),
         transports: transports.map(|s| s.to_string()),
         created_at: Utc::now().to_rfc3339(),
     };
     db.execute(
-        "INSERT INTO passkeys (id, rp_id, credential_id, user_handle, public_key, sign_count, transports, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![rec.id, rec.rp_id, rec.credential_id, rec.user_handle, rec.public_key, rec.sign_count, rec.transports, rec.created_at],
+        "INSERT INTO passkeys (id, rp_id, credential_id, user_handle, public_key, sign_count, title, transports, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![rec.id, rec.rp_id, rec.credential_id, rec.user_handle, rec.public_key, rec.sign_count, rec.title, rec.transports, rec.created_at],
     )?;
     Ok(rec)
 }
@@ -1007,7 +1028,7 @@ async fn get_passkeys_by_user(
     rp_id: &str,
     user_handle: &str,
 ) -> Result<Vec<PasskeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
-    let mut stmt = db.prepare("SELECT id, rp_id, credential_id, user_handle, public_key, sign_count, transports, created_at FROM passkeys WHERE rp_id = ?1 AND user_handle = ?2")?;
+    let mut stmt = db.prepare("SELECT id, rp_id, credential_id, user_handle, public_key, sign_count, title, transports, created_at FROM passkeys WHERE rp_id = ?1 AND user_handle = ?2")?;
     let rows = stmt.query_map(params![rp_id, user_handle], |row| {
         Ok(PasskeyRecord {
             id: row.get(0)?,
@@ -1016,8 +1037,9 @@ async fn get_passkeys_by_user(
             user_handle: row.get(3)?,
             public_key: row.get(4)?,
             sign_count: row.get(5)?,
-            transports: row.get(6)?,
-            created_at: row.get(7)?,
+            title: row.get(6)?,
+            transports: row.get(7)?,
+            created_at: row.get(8)?,
         })
     })?;
     let mut out = Vec::new();
@@ -1031,8 +1053,8 @@ async fn search_passkeys(
 ) -> Result<Vec<PasskeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
     let like = format!("%{}%", keyword);
     let mut stmt = db.prepare(
-        "SELECT id, rp_id, credential_id, user_handle, public_key, sign_count, transports, created_at FROM passkeys \
-         WHERE id LIKE ?1 OR rp_id LIKE ?1 OR credential_id LIKE ?1 OR user_handle LIKE ?1 OR IFNULL(transports,'') LIKE ?1",
+        "SELECT id, rp_id, credential_id, user_handle, public_key, sign_count, title, transports, created_at FROM passkeys \
+         WHERE id LIKE ?1 OR rp_id LIKE ?1 OR credential_id LIKE ?1 OR user_handle LIKE ?1 OR IFNULL(title,'') LIKE ?1 OR IFNULL(transports,'') LIKE ?1",
     )?;
     let rows = stmt.query_map(params![like], |row| {
         Ok(PasskeyRecord {
@@ -1042,8 +1064,9 @@ async fn search_passkeys(
             user_handle: row.get(3)?,
             public_key: row.get(4)?,
             sign_count: row.get(5)?,
-            transports: row.get(6)?,
-            created_at: row.get(7)?,
+            title: row.get(6)?,
+            transports: row.get(7)?,
+            created_at: row.get(8)?,
         })
     })?;
     let mut out = Vec::new();
@@ -1053,14 +1076,17 @@ async fn search_passkeys(
 }
 
 async fn delete_passkey(db: &Connection, id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    db.execute("DELETE FROM passkeys WHERE id = ?1", params![id])?;
+    let n = db.execute("DELETE FROM passkeys WHERE id = ?1", params![id])?;
+    if n == 0 {
+        return Err(format!("id={} が見つかりません", id).into());
+    }
     Ok(())
 }
 
 fn export_passkeys_csv(db: &Connection, path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut wtr = WriterBuilder::new().from_path(path)?;
-    wtr.write_record(["id", "rp_id", "credential_id", "user_handle", "public_key", "sign_count", "transports", "created_at"])?;
-    let mut stmt = db.prepare("SELECT id, rp_id, credential_id, user_handle, public_key, sign_count, transports, created_at FROM passkeys ORDER BY created_at DESC")?;
+    wtr.write_record(["id", "rp_id", "credential_id", "user_handle", "public_key", "sign_count", "title", "transports", "created_at"])?;
+    let mut stmt = db.prepare("SELECT id, rp_id, credential_id, user_handle, public_key, sign_count, title, transports, created_at FROM passkeys ORDER BY created_at DESC")?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -1070,11 +1096,12 @@ fn export_passkeys_csv(db: &Connection, path: &str) -> Result<(), Box<dyn std::e
             row.get::<_, String>(4)?,
             row.get::<_, i64>(5)?,
             row.get::<_, Option<String>>(6)?,
-            row.get::<_, String>(7)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, String>(8)?,
         ))
     })?;
     for r in rows {
-        let (id, rp_id, credential_id, user_handle, public_key, sign_count, transports, created_at) = r?;
+        let (id, rp_id, credential_id, user_handle, public_key, sign_count, title, transports, created_at) = r?;
         wtr.write_record([
             id,
             rp_id,
@@ -1082,6 +1109,7 @@ fn export_passkeys_csv(db: &Connection, path: &str) -> Result<(), Box<dyn std::e
             user_handle,
             public_key,
             sign_count.to_string(),
+            title.unwrap_or_default(),
             transports.unwrap_or_default(),
             created_at,
         ])?;
@@ -1101,8 +1129,10 @@ async fn import_passkeys_csv(db: &Connection, path: &str) -> Result<(), Box<dyn 
         let user_handle = get("user_handle").or_else(|| rec.get(2).map(|s| s.to_string())).ok_or("user_handle がありません")?;
         let public_key = get("public_key").or_else(|| rec.get(3).map(|s| s.to_string())).ok_or("public_key がありません")?;
         let sign_count = get("sign_count").or_else(|| rec.get(4).map(|s| s.to_string())).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        let transports = get("transports").or_else(|| rec.get(5).map(|s| s.to_string()));
-        let _ = insert_passkey(db, &rp_id, &credential_id, &user_handle, &public_key, sign_count, transports.as_deref()).await?;
+        // title は6番目（インデックス5）想定（なければNone）
+        let title = get("title").or_else(|| rec.get(5).map(|s| s.to_string()));
+        let transports = get("transports").or_else(|| rec.get(6).map(|s| s.to_string()));
+        let _ = insert_passkey(db, &rp_id, &credential_id, &user_handle, &public_key, sign_count, title.as_deref(), transports.as_deref()).await?;
     }
     Ok(())
 }
