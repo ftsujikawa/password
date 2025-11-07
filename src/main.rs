@@ -116,7 +116,7 @@ fn print_usage() {
     println!("  tsupasswd import <csv_path>");
     println!("  tsupasswd auth <secret> [--ttl MINUTES]");
     println!("  tsupasswd logout");
-    println!("  tsupasswd status");
+    println!("  tsupasswd status [--json]");
     println!("  tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV] [--title T]");
     println!("  tsupasswd passkey get <rp_id> <user_handle> [--json]");
     println!("  tsupasswd passkey search <keyword> [--json]");
@@ -412,9 +412,31 @@ async fn main() {
             }
         }
         Some("status") => {
+            let mut json_out = false;
+            while let Some(flag) = args.next() { if flag == "--json" { json_out = true; } }
             match session_status() {
-                Ok(Some(rem)) => println!("認証済み: 残り {} 秒", rem),
-                Ok(None) => { eprintln!("未認証です"); std::process::exit(1); }
+                Ok(Some(rem)) => {
+                    if json_out {
+                        let obj = serde_json::json!({
+                            "authenticated": true,
+                            "remaining_seconds": rem,
+                        });
+                        match serde_json::to_string_pretty(&obj) { Ok(s) => println!("{}", s), Err(e) => { eprintln!("JSONエンコードに失敗しました: {}", e); std::process::exit(1); } }
+                    } else {
+                        println!("認証済み: 残り {} 秒", rem)
+                    }
+                }
+                Ok(None) => {
+                    if json_out {
+                        let obj = serde_json::json!({
+                            "authenticated": false
+                        });
+                        match serde_json::to_string_pretty(&obj) { Ok(s) => println!("{}", s), Err(e) => { eprintln!("JSONエンコードに失敗しました: {}", e); std::process::exit(1); } }
+                    } else {
+                        eprintln!("未認証です");
+                    }
+                    std::process::exit(1);
+                }
                 Err(e) => { eprintln!("状態取得に失敗しました: {}", e); std::process::exit(1); }
             }
         }
