@@ -781,6 +781,8 @@ async fn init_db() -> Result<Connection, Box<dyn std::error::Error + Send + Sync
     )?;
     // 既存DBへの後方互換: title列が無い場合に追加
     let _ = conn.execute("ALTER TABLE passkeys ADD COLUMN title TEXT", []);
+    // 既存DBへの後方互換: transports列が無い場合に追加
+    let _ = conn.execute("ALTER TABLE passkeys ADD COLUMN transports TEXT", []);
     Ok(conn)
 }
 
