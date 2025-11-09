@@ -627,15 +627,15 @@ async fn main() {
 const UPPER: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const LOWER: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
 const DIGIT: &[u8] = b"0123456789";
+#[allow(dead_code)]
 const SYMBOL: &[u8] = b"!@#$%^&*()-_=+[]{};:,.?/"; // スペースやバックスラッシュ、`'"` は除外
 
 fn generate_password(len: usize) -> String {
     // 総合アルファベット
-    let mut alphabet: Vec<u8> = Vec::with_capacity(UPPER.len() + LOWER.len() + DIGIT.len() + SYMBOL.len());
+    let mut alphabet: Vec<u8> = Vec::with_capacity(UPPER.len() + LOWER.len() + DIGIT.len());
     alphabet.extend_from_slice(UPPER);
     alphabet.extend_from_slice(LOWER);
     alphabet.extend_from_slice(DIGIT);
-    alphabet.extend_from_slice(SYMBOL);
 
     if len == 0 {
         return String::new();
@@ -643,7 +643,7 @@ fn generate_password(len: usize) -> String {
 
     // 少なくとも各カテゴリから1文字ずつ確保（ただし必要な長さを超えない）
     let mut bytes: Vec<u8> = Vec::with_capacity(len);
-    for cat in [UPPER, LOWER, DIGIT, SYMBOL] {
+    for cat in [UPPER, LOWER, DIGIT] {
         if bytes.len() >= len { break; }
         let idx = rand_index(cat.len());
         bytes.push(cat[idx]);
