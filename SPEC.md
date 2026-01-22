@@ -2,14 +2,13 @@
 
 ## 概要
 - 本ツールはコマンドラインから安全なパスワードを生成し、SQLiteに「URL・ユーザID・パスワード」を1組として保存・取得できるユーティリティです。さらに、各レコードに任意の**タイトル(title)**と**備考(note)**を付与できます。
-- 併せて、**パスキー(passkey)** 情報（`rp_id`/`credential_id`/`user_handle`/`public_key`/`sign_count`/`transports`）の保存・検索・削除・CSV入出力にも対応します。
 - すべての機密操作はセッション認証が必要です（`tsupasswd auth <secret>`）。
 
 ## 対象ファイル・構成
 - プロジェクトルート: `password/`
   - 依存設定: `Cargo.toml`
   - 実装: `src/main.rs`
-  - DBファイル: `~/.password_cli/passwords.db`（`HOME` 配下に自動生成）
+  - DBファイル: `~/.tsupasswd_db/passwords.db`（`HOME` 配下に自動生成）
   - セッションファイル: `~/.password_cli/session`（有効期限UNIX秒を保存）
 
 ## 依存関係
@@ -92,15 +91,6 @@
     - 仕様: `passwords` レコードをCSVから取り込み（`created_at` は現在時刻）
     - 形式: `import <csv_path>`
     - 使用例: `cargo run -- import ./passwords.csv`
-  - **パスキー（passkey サブコマンド）**
-    - `passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]`
-    - `passkey get <rp_id> <user_handle> [--json]`
-    - `passkey search <keyword> [--json]`
-    - `passkey delete <id>`
-    - `passkey export <csv_path>`
-    - `passkey import <csv_path>`
-    - 出力例（get/search）:
-      - `id=<ID> rp_id="example.com" credential_id="cred-123" user_handle="user-abc" sign_count=42 transports="usb,nfc"`
 
 ### ヘルプ表示（--help/-h/help）
 
@@ -119,12 +109,6 @@
   tsupasswd auth <secret> [--ttl MINUTES]
   tsupasswd logout
   tsupasswd status
-  tsupasswd passkey add <rp_id> <credential_id> <user_handle> <public_key> [--sign-count N] [--transports CSV]
-  tsupasswd passkey get <rp_id> <user_handle> [--json]
-  tsupasswd passkey search <keyword> [--json]
-  tsupasswd passkey delete <id>
-  tsupasswd passkey export <csv_path>
-  tsupasswd passkey import <csv_path>
 
 共通オプション:
   -h, --help    このヘルプを表示
@@ -135,8 +119,6 @@
   search:  --json
   update:  --url U, --user NAME, --password PASS | --length N, --title T, --note N
   auth:    --ttl MINUTES
-  passkey add: --sign-count N, --transports CSV
-  passkey get/search: --json
 
 環境変数:
   AUTH_SECRET        認証用シークレット（tsupasswd auth で使用）
@@ -154,16 +136,12 @@
   - 入力: `cargo run -- get www.example`
   - 出力例（複数件ある場合は新しい順で複数行出力）:
     - `username="user01" password="S3cure!Pass"`
- - パスキー取得
-   - 入力: `cargo run -- passkey get example.com user-abc`
-   - 出力例: `id=<ID> rp_id="example.com" credential_id="cred-123" user_handle="user-abc" sign_count=42 transports="usb,nfc"`
 
 ## 実装詳細（関数・処理）
 - ファイル: `src/main.rs`
   - CLI分岐: `main()`
     - `auth`/`logout`/`status` によるセッション管理。
     - `add`/`get`/`search`/`update`/`delete`/`export`/`import`（パスワード用）。
-    - `passkey` サブコマンド群: `add`/`get`/`search`/`delete`/`export`/`import`。
   - パスワード生成: `generate_password(len: usize) -> String`
     - 文字集合:
       - `UPPER`: `A-Z`
@@ -178,8 +156,8 @@
       - 最後にFisher-Yatesでシャッフル
     - 乱数源: `rand::rngs::OsRng` を用いたリジェクションサンプリング（偏り防止）
   - DB初期化: `init_db()`
-    - DBファイル: `~/.password_cli/passwords.db`
-    - テーブル自動生成: `passwords`, `passkeys`
+    - DBファイル: `~/.tsupasswd_db/passwords.db`
+    - テーブル自動生成: `passwords`
   - パスワード保存: `insert_password()`
     - 保存時に `encrypt_for_id(id, password)` を用いて暗号化して格納
   - 取得: `fetch_by_url()`
@@ -188,13 +166,12 @@
   - 更新: `update_entry()`（指定項目のみ更新、パスワードは再暗号化）
   - 削除: `delete_entry()`
   - CSV: `export_csv()` / `import_csv()`（パスワードはCSVでは平文）
-  - パスキー: `insert_passkey()` / `get_passkeys_by_user()` / `search_passkeys()` / `delete_passkey()` / `export_passkeys_csv()` / `import_passkeys_csv()`
   - エラーメッセージ表示・終了:
     - 失敗時は標準エラー出力にメッセージを出し、`exit(1)` で終了
     - 使用例ヘルプ: `print_add_usage_and_exit()`（`--title`/`--note`を含む）
 
 ## データベース仕様
-- DBファイル: `~/.password_cli/passwords.db`
+- DBファイル: `~/.tsupasswd_db/passwords.db`
 - テーブル: `passwords`
   - `id TEXT PRIMARY KEY`
   - `url TEXT NOT NULL`
@@ -202,15 +179,6 @@
   - `password TEXT NOT NULL`（暗号化済み）
   - `title TEXT`
   - `note TEXT`
-  - `created_at TEXT NOT NULL`
-- テーブル: `passkeys`
-  - `id TEXT PRIMARY KEY`
-  - `rp_id TEXT NOT NULL`
-  - `credential_id TEXT NOT NULL`
-  - `user_handle TEXT NOT NULL`
-  - `public_key TEXT NOT NULL`
-  - `sign_count INTEGER NOT NULL`
-  - `transports TEXT`（CSV文字列, 任意）
   - `created_at TEXT NOT NULL`
 
 ## セキュリティ方針
@@ -261,7 +229,7 @@
  - 削除: `cargo run -- delete 1`
 
 ## テスト（自動）
-- 統合テスト: `tests/passkey_cli.rs`
-  - セッション開始後、`passkey add/get/search/export/delete` の一連を検証
+- 統合テスト: `tests/password_cli.rs`
+  - セッション開始後、`add`/`get`/`search`/`update`/`delete`/`export`/`import` の一連を検証
   - テストごとに `HOME` を一時ディレクトリ、`AUTH_SECRET` を固定
   - 実行: `cargo test`
